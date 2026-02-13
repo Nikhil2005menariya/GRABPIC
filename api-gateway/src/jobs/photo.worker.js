@@ -39,23 +39,36 @@ const worker = new Worker(
     console.log("📸 Processing photo:", photoId);
 
     try {
+      // 🔥 Defensive validation
+      if (!photoId || !s3Key || !eventId) {
+        throw new Error("Missing required job data");
+      }
+
+      // 🔥 Force everything to string (CRITICAL FIX)
+      const payload = {
+        photoId: String(photoId),
+        s3Key: String(s3Key),
+        eventId: String(eventId),
+      };
+
+      console.log("➡ Sending to AI:", payload);
+
       // Call AI service
-      await axios.post(`${process.env.AI_SERVICE_URL}/process-photo`, {
-        photoId,
-        s3Key,
-        eventId,
-      });
+      await axios.post(
+        `${process.env.AI_SERVICE_URL}/process-photo`,
+        payload
+      );
 
       // Mark photo as processed
       await Photo.findByIdAndUpdate(photoId, {
         processed: true,
       });
 
-      // Increment processed count
+      // 🔥 FIX MONGOOSE DEPRECATION WARNING
       const event = await Event.findByIdAndUpdate(
         eventId,
         { $inc: { processedPhotos: 1 } },
-        { new: true }
+        { returnDocument: "after" } // instead of { new: true }
       );
 
       // If all processed → mark event ready
@@ -78,15 +91,5 @@ const worker = new Worker(
   { connection }
 );
 
-// --------------------------------------
-// Worker Events
-// --------------------------------------
-worker.on("completed", (job) => {
-  console.log(`🎉 Job completed: ${job.id}`);
-});
-
-worker.on("failed", (job, err) => {
-  console.error(`💥 Job failed: ${job?.id}`, err.message);
-});
 
 console.log("🚀 Photo Worker Started");

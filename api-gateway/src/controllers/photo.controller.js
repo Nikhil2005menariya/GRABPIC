@@ -33,7 +33,7 @@ const generateUploadUrl = async (req, res) => {
     const s3Key = `events/${eventId}/${Date.now()}-${fileName}`;
 
     const command = new PutObjectCommand({
-      Bucket: process.env.AWS_BUCKET,
+      Bucket: process.env.AWS_S3_BUCKET,
       Key: s3Key,
       ContentType: fileType,
     });

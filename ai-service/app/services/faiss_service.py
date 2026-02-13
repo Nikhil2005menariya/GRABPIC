@@ -4,29 +4,39 @@ import os
 import json
 
 INDEX_DIR = os.getenv("FAISS_INDEX_PATH", "./faiss_indexes")
-
 os.makedirs(INDEX_DIR, exist_ok=True)
+
 
 def get_index_path(event_id):
     return os.path.join(INDEX_DIR, f"{event_id}.index")
 
+
 def get_metadata_path(event_id):
     return os.path.join(INDEX_DIR, f"{event_id}_meta.json")
 
+
+# ----------------------------------------
+# Use INNER PRODUCT (Cosine Similarity)
+# ----------------------------------------
 def load_or_create_index(event_id, dim=512):
     index_path = get_index_path(event_id)
 
     if os.path.exists(index_path):
         return faiss.read_index(index_path)
 
-    return faiss.IndexFlatL2(dim)
+    # 🔥 Use IP instead of L2
+    return faiss.IndexFlatIP(dim)
+
 
 def save_index(index, event_id):
     faiss.write_index(index, get_index_path(event_id))
 
+
+# ----------------------------------------
+# Add Embeddings (Must Be Normalized!)
+# ----------------------------------------
 def add_embeddings(event_id, photo_id, embeddings):
     index = load_or_create_index(event_id)
-
     metadata_path = get_metadata_path(event_id)
 
     if os.path.exists(metadata_path):
@@ -37,6 +47,10 @@ def add_embeddings(event_id, photo_id, embeddings):
 
     for emb in embeddings:
         vector = np.array([emb]).astype("float32")
+
+        # Ensure normalized (safety check)
+        faiss.normalize_L2(vector)
+
         index.add(vector)
         metadata.append(photo_id)
 
@@ -46,7 +60,10 @@ def add_embeddings(event_id, photo_id, embeddings):
         json.dump(metadata, f)
 
 
-def search_embeddings(event_id, query_embedding, threshold=1.0):
+# ----------------------------------------
+# Search Using Cosine Similarity
+# ----------------------------------------
+def search_embeddings(event_id, query_embedding, threshold=0.45):
     index_path = get_index_path(event_id)
     metadata_path = get_metadata_path(event_id)
 
@@ -60,14 +77,19 @@ def search_embeddings(event_id, query_embedding, threshold=1.0):
 
     query_vector = np.array([query_embedding]).astype("float32")
 
-    distances, indices = index.search(query_vector, k=20)
+    # Normalize query
+    faiss.normalize_L2(query_vector)
+
+    scores, indices = index.search(query_vector, k=20)
 
     matches = []
 
-    for dist, idx in zip(distances[0], indices[0]):
+    for score, idx in zip(scores[0], indices[0]):
         if idx == -1:
             continue
-        if dist < threshold:
+
+        # 🔥 For cosine similarity, HIGHER is better
+        if score > threshold:
             matches.append(metadata[idx])
 
     return list(set(matches))
