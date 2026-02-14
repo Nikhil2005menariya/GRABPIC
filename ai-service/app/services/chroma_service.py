@@ -10,19 +10,17 @@ client = chromadb.CloudClient(
     database=os.getenv("CHROMA_DATABASE"),
 )
 
-
 # -----------------------------------------
-# Get Collection Per Event (Cosine Space)
+# Get Collection Per Event
 # -----------------------------------------
 def get_collection(event_id: str):
     return client.get_or_create_collection(
         name=f"event_{event_id}",
-        metadata={"hnsw:space": "cosine"}  # 🔥 Force cosine similarity
+        metadata={"hnsw:space": "cosine"}
     )
 
-
 # -----------------------------------------
-# Add Embeddings (Multi-face Safe)
+# Add Embeddings
 # -----------------------------------------
 def add_embeddings(event_id: str, photo_id: str, embeddings):
     collection = get_collection(event_id)
@@ -42,9 +40,8 @@ def add_embeddings(event_id: str, photo_id: str, embeddings):
         metadatas=metadatas
     )
 
-
 # -----------------------------------------
-# Search Embeddings (Cosine Similarity)
+# Search Embeddings
 # -----------------------------------------
 def search_embeddings(event_id: str, query_embedding, threshold=0.40):
     collection = get_collection(event_id)
@@ -59,18 +56,27 @@ def search_embeddings(event_id: str, query_embedding, threshold=0.40):
     if "distances" not in results or not results["distances"]:
         return []
 
-    # For cosine in Chroma:
-    # distance = 1 - cosine_similarity
-    # lower distance = better match
-
     for dist, meta in zip(
         results["distances"][0],
         results["metadatas"][0]
     ):
         similarity = 1 - dist
-
         if similarity > threshold:
             matches.append(meta["photoId"])
 
-    # Remove duplicates (multi-face safe)
     return list(set(matches))
+
+# -----------------------------------------
+# Delete Event Embeddings (CLOUD SAFE)
+# -----------------------------------------
+def delete_event_embeddings(event_id: str):
+    collection_name = f"event_{event_id}"
+
+    collections = client.list_collections()
+    collection_names = [c.name for c in collections]
+
+    if collection_name in collection_names:
+        client.delete_collection(name=collection_name)
+        return True
+
+    return False

@@ -1,6 +1,7 @@
 const Event = require("../models/event.model");
 const User = require("../models/user.model");
 const Photo = require("../models/photo.model");
+const axios = require("axios");
 const generateEventCode = require("../utils/generateEventCode");
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const s3 = require("../config/s3");
@@ -191,10 +192,6 @@ exports.getMyEvents = async (req, res) => {
 };
 
 //
-// ----------------------------------------
-// DELETE EVENT (Owner Only + Full Cleanup)
-// ----------------------------------------
-//
 exports.deleteEvent = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -207,7 +204,6 @@ exports.deleteEvent = async (req, res) => {
       });
     }
 
-    // 🔐 Only owner can delete
     if (event.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         message: "Only event owner can delete this event",
@@ -215,12 +211,24 @@ exports.deleteEvent = async (req, res) => {
     }
 
     // --------------------------------------
-    // 1️⃣ Get all photos of this event
+    // 1️⃣ Delete embeddings from AI service
+    // --------------------------------------
+    try {
+      await axios.delete(
+        `${process.env.AI_SERVICE_URL}/delete-event/${eventId}`
+      );
+      console.log("✅ Chroma embeddings deleted");
+    } catch (err) {
+      console.error("Chroma delete error:", err.message);
+    }
+
+    // --------------------------------------
+    // 2️⃣ Get all photos
     // --------------------------------------
     const photos = await Photo.find({ event: event._id });
 
     // --------------------------------------
-    // 2️⃣ Delete images from S3
+    // 3️⃣ Delete S3 objects
     // --------------------------------------
     for (const photo of photos) {
       try {
@@ -236,20 +244,17 @@ exports.deleteEvent = async (req, res) => {
     }
 
     // --------------------------------------
-    // 3️⃣ Delete photos from MongoDB
+    // 4️⃣ Delete photo documents
     // --------------------------------------
     await Photo.deleteMany({ event: event._id });
 
     // --------------------------------------
-    // 4️⃣ Remove event from owner's createdEvents
+    // 5️⃣ Remove event from users
     // --------------------------------------
     await User.findByIdAndUpdate(event.owner, {
       $pull: { createdEvents: event._id },
     });
 
-    // --------------------------------------
-    // 5️⃣ Remove event from all users' joinedEvents
-    // --------------------------------------
     await User.updateMany(
       { joinedEvents: event._id },
       { $pull: { joinedEvents: event._id } }
