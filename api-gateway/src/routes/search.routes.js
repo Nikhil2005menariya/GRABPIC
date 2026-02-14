@@ -4,6 +4,7 @@ const protect = require("../middlewares/auth.middleware");
 const {
   uploadMiddleware,
   searchPhotos,
+  downloadAllPhotos,
 } = require("../controllers/search.controller");
 
 router.post(
@@ -13,4 +14,9 @@ router.post(
   searchPhotos
 );
 
+router.post(
+  "/download-all",
+  protect,
+  downloadAllPhotos
+);
 module.exports = router;

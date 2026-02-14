@@ -1,5 +1,6 @@
 const multer = require("multer");
 const axios = require("axios");
+const archiver = require("archiver");
 const FormData = require("form-data");
 
 const Event = require("../models/event.model");
@@ -129,3 +130,90 @@ exports.searchPhotos = async (req, res) => {
     });
   }
 };
+
+
+// --------------------------------------
+// Download Matched Photos as ZIP
+// --------------------------------------
+exports.downloadAllPhotos = async (req, res) => {
+  try {
+    const { eventCode, photoIds } = req.body;
+
+    if (!eventCode || !photoIds || !Array.isArray(photoIds)) {
+      return res.status(400).json({
+        message: "eventCode and photoIds are required",
+      });
+    }
+
+    const event = await Event.findOne({ eventCode });
+
+    if (!event) {
+      return res.status(404).json({
+        message: "Event not found",
+      });
+    }
+
+    // 🔐 Ensure user is owner or participant
+    const isOwner =
+      event.owner.toString() === req.user._id.toString();
+
+    const isParticipant =
+      event.participants &&
+      event.participants.some(
+        (p) => p.toString() === req.user._id.toString()
+      );
+
+    if (!isOwner && !isParticipant) {
+      return res.status(403).json({
+        message: "Not authorized for this event",
+      });
+    }
+
+    // 🔥 Only fetch matched photos
+    const photos = await Photo.find({
+      _id: { $in: photoIds },
+      event: event._id,
+    });
+
+    if (!photos.length) {
+      return res.status(404).json({
+        message: "No matching photos found",
+      });
+    }
+
+    // Set headers
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=grabpic_${eventCode}.zip`
+    );
+
+    const archive = archiver("zip", {
+      zlib: { level: 9 },
+    });
+
+    archive.pipe(res);
+
+    for (const photo of photos) {
+      const command = new GetObjectCommand({
+        Bucket: process.env.AWS_S3_BUCKET,
+        Key: photo.s3Key,
+      });
+
+      const s3Object = await s3.send(command);
+
+      archive.append(s3Object.Body, {
+        name: photo.s3Key.split("/").pop(),
+      });
+    }
+
+    await archive.finalize();
+
+  } catch (error) {
+    console.error("ZIP Download Error:", error);
+    res.status(500).json({
+      message: "Failed to generate zip",
+    });
+  }
+};
+

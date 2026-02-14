@@ -1,48 +1,22 @@
 version: "3.9"
 
 services:
-  # -------------------------------
-  # MongoDB
-  # -------------------------------
-  mongo:
-    image: mongo:7
-    container_name: grabpic-mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    restart: always
-
-  # -------------------------------
-  # Redis
-  # -------------------------------
-  redis:
-    image: redis:7
-    container_name: grabpic-redis
-    ports:
-      - "6379:6379"
-    restart: always
-
-  # -------------------------------
-  # AI Service (FastAPI + InsightFace + Embedded Chroma)
-  # -------------------------------
+  # --------------------------------
+  # AI Service (FastAPI + InsightFace + Chroma Cloud)
+  # --------------------------------
   ai:
     build:
       context: ./ai-service
     container_name: grabpic-ai
     ports:
       - "8000:8000"
-    volumes:
-      - chroma_data:/app/chroma_data   # 🔥 Persistent embeddings
     env_file:
       - ./ai-service/.env
-    depends_on:
-      - redis
     restart: always
 
-  # -------------------------------
+  # --------------------------------
   # API Gateway (Express)
-  # -------------------------------
+  # --------------------------------
   api:
     build:
       context: ./api-gateway
@@ -51,33 +25,21 @@ services:
     ports:
       - "5050:5000"
     depends_on:
-      - mongo
-      - redis
       - ai
     env_file:
       - ./api-gateway/.env
     restart: always
 
-  # -------------------------------
+  # --------------------------------
   # Worker (BullMQ)
-  # -------------------------------
+  # --------------------------------
   worker:
     build:
       context: ./api-gateway
       dockerfile: Dockerfile.worker
     container_name: grabpic-worker
     depends_on:
-      - mongo
-      - redis
       - ai
     env_file:
       - ./api-gateway/.env
     restart: always
-
-
-# -------------------------------
-# Named Volumes
-# -------------------------------
-volumes:
-  mongo_data:
-  chroma_data:

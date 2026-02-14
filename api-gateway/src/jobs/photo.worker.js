@@ -24,9 +24,11 @@ mongoose
 // --------------------------------------
 const connection = new IORedis({
   host: process.env.REDIS_HOST,
-  port: process.env.REDIS_PORT,
-  maxRetriesPerRequest: null, // required for BullMQ
+  port: Number(process.env.REDIS_PORT),
+  password: process.env.REDIS_PASSWORD,
+  maxRetriesPerRequest: null,
 });
+
 
 // --------------------------------------
 // Worker Definition
