@@ -5,7 +5,7 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 
 const connectDB = require("./config/db");
-require("./config/redis"); // ensure redis initializes
+require("./config/redis");
 
 const healthRoutes = require("./routes/health.routes");
 const authRoutes = require("./routes/auth.routes");
@@ -25,10 +25,23 @@ connectDB();
 // ------------------------
 app.use(express.json());
 
+// ------------------------
 // CORS Configuration
+// ------------------------
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:5173",
+];
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL,
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS not allowed"));
+      }
+    },
     credentials: true,
   })
 );
@@ -37,8 +50,8 @@ app.use(
 // Rate Limiting
 // ------------------------
 const searchLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // limit each IP to 50 search requests per window
+  windowMs: 15 * 60 * 1000,
+  max: 50,
   message: {
     message: "Too many search requests. Please try again later.",
   },
@@ -53,9 +66,21 @@ app.use("/api/events", eventRoutes);
 app.use("/api/photos", photoRoutes);
 app.use("/api/search", searchLimiter, searchRoutes);
 
+// ------------------------
 // Default Route
+// ------------------------
 app.get("/", (req, res) => {
   res.send("🚀 GRABPIC API Running");
+});
+
+// ------------------------
+// Global Error Handler
+// ------------------------
+app.use((err, req, res, next) => {
+  console.error("🔥 Global Error:", err.message);
+  res.status(err.statusCode || 500).json({
+    message: err.message || "Internal Server Error",
+  });
 });
 
 // ------------------------

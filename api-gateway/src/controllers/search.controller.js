@@ -4,6 +4,7 @@ const FormData = require("form-data");
 
 const Event = require("../models/event.model");
 const Photo = require("../models/photo.model");
+const User = require("../models/user.model");
 
 const { GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -16,7 +17,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
 
 // ------------------------------
-// Search Photos
+// Search Photos (Protected)
 // ------------------------------
 exports.searchPhotos = async (req, res) => {
   try {
@@ -34,6 +35,22 @@ exports.searchPhotos = async (req, res) => {
     if (!event) {
       return res.status(404).json({
         message: "Event not found",
+      });
+    }
+
+    // 🔐 Check if user is owner or joined
+    const user = await User.findById(req.user._id);
+
+    const isOwner =
+      event.owner.toString() === req.user._id.toString();
+
+    const isJoined = user.joinedEvents.some(
+      (e) => e.toString() === event._id.toString()
+    );
+
+    if (!isOwner && !isJoined) {
+      return res.status(403).json({
+        message: "You are not a participant of this event",
       });
     }
 
@@ -68,10 +85,11 @@ exports.searchPhotos = async (req, res) => {
     }
 
     // -------------------------
-    // Fetch matching photos
+    // Fetch matching photos (extra safety filter by event)
     // -------------------------
     const photos = await Photo.find({
       _id: { $in: matches },
+      event: event._id, // 🔥 critical safety
     });
 
     // -------------------------
@@ -80,12 +98,12 @@ exports.searchPhotos = async (req, res) => {
     const signedPhotos = await Promise.all(
       photos.map(async (photo) => {
         const command = new GetObjectCommand({
-          Bucket: process.env.AWS_S3_BUCKET, // 🔥 FIXED
+          Bucket: process.env.AWS_S3_BUCKET,
           Key: photo.s3Key,
         });
 
         const url = await getSignedUrl(s3, command, {
-          expiresIn: 60 * 5, // 5 minutes
+          expiresIn: 60 * 5,
         });
 
         return {

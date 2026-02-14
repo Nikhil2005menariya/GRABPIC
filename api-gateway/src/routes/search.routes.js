@@ -6,7 +6,11 @@ const {
   searchPhotos,
 } = require("../controllers/search.controller");
 
-router.post("/", uploadMiddleware, searchPhotos);
-
+router.post(
+  "/",
+  protect,
+  uploadMiddleware,
+  searchPhotos
+);
 
 module.exports = router;

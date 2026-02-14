@@ -1,7 +1,15 @@
 const Event = require("../models/event.model");
+const User = require("../models/user.model");
+const Photo = require("../models/photo.model");
 const generateEventCode = require("../utils/generateEventCode");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const s3 = require("../config/s3");
 
-// Create Event
+//
+// ----------------------------------------
+// CREATE EVENT
+// ----------------------------------------
+//
 exports.createEvent = async (req, res) => {
   try {
     const { name } = req.body;
@@ -13,7 +21,7 @@ exports.createEvent = async (req, res) => {
     let eventCode;
     let existing;
 
-    // Ensure unique event code
+    // 🔥 Ensure unique event code
     do {
       eventCode = generateEventCode();
       existing = await Event.findOne({ eventCode });
@@ -25,18 +33,74 @@ exports.createEvent = async (req, res) => {
       eventCode,
     });
 
+    // 🔥 Add to user's createdEvents
+    await User.findByIdAndUpdate(req.user._id, {
+      $push: { createdEvents: event._id },
+    });
+
     res.status(201).json({
       message: "Event created successfully",
       event,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Create event error:", error);
     res.status(500).json({ message: "Event creation failed" });
   }
 };
 
-// Get My Events
-exports.getMyEvents = async (req, res) => {
+// ----------------------------------------
+// JOIN EVENT (Participate via Code)
+// ----------------------------------------
+exports.joinEvent = async (req, res) => {
+  try {
+    const { eventCode } = req.body;
+
+    if (!eventCode) {
+      return res.status(400).json({ message: "Event code is required" });
+    }
+
+    const event = await Event.findOne({ eventCode });
+
+    if (!event) {
+      return res.status(404).json({ message: "Invalid event code" });
+    }
+
+    const userId = req.user._id;
+
+    // 🔥 Prevent duplicate join (check Event side)
+    if (event.participants.includes(userId)) {
+      return res.status(400).json({
+        message: "Already joined this event",
+      });
+    }
+
+    // ✅ Add user to event participants
+    event.participants.push(userId);
+    await event.save();
+
+    // ✅ Add event to user's joinedEvents
+    await User.findByIdAndUpdate(userId, {
+      $addToSet: { joinedEvents: event._id }, // safer than $push
+    });
+
+    res.status(200).json({
+      message: "Joined event successfully",
+      event,
+    });
+
+  } catch (error) {
+    console.error("Join event error:", error);
+    res.status(500).json({ message: "Failed to join event" });
+  }
+};
+
+
+//
+// ----------------------------------------
+// GET MY CREATED EVENTS
+// ----------------------------------------
+//
+exports.getMyCreatedEvents = async (req, res) => {
   try {
     const events = await Event.find({ owner: req.user._id }).sort({
       createdAt: -1,
@@ -44,10 +108,35 @@ exports.getMyEvents = async (req, res) => {
 
     res.status(200).json(events);
   } catch (error) {
+    console.error("Get created events error:", error);
     res.status(500).json({ message: "Failed to fetch events" });
   }
 };
 
+//
+// ----------------------------------------
+// GET MY JOINED EVENTS
+// ----------------------------------------
+//
+exports.getMyJoinedEvents = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate({
+      path: "joinedEvents",
+      options: { sort: { createdAt: -1 } },
+    });
+
+    res.status(200).json(user.joinedEvents);
+  } catch (error) {
+    console.error("Get joined events error:", error);
+    res.status(500).json({ message: "Failed to fetch joined events" });
+  }
+};
+
+//
+// ----------------------------------------
+// GET EVENT STATUS (Processing Progress)
+// ----------------------------------------
+//
 exports.getEventStatus = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -58,18 +147,128 @@ exports.getEventStatus = async (req, res) => {
       return res.status(404).json({ message: "Event not found" });
     }
 
-    res.json({
+    const progress =
+      event.totalPhotos === 0
+        ? 0
+        : Math.round((event.processedPhotos / event.totalPhotos) * 100);
+
+    res.status(200).json({
       status: event.status,
       totalPhotos: event.totalPhotos,
       processedPhotos: event.processedPhotos,
-      progress:
-        event.totalPhotos === 0
-          ? 0
-          : Math.round(
-              (event.processedPhotos / event.totalPhotos) * 100
-            ),
+      progress,
     });
   } catch (error) {
+    console.error("Get event status error:", error);
     res.status(500).json({ message: "Failed to get status" });
   }
 };
+
+
+exports.getMyEvents = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .populate({
+        path: "createdEvents",
+        options: { sort: { createdAt: -1 } },
+      })
+      .populate({
+        path: "joinedEvents",
+        options: { sort: { createdAt: -1 } },
+      });
+
+    res.status(200).json({
+      created: user.createdEvents,
+      joined: user.joinedEvents,
+    });
+
+  } catch (error) {
+    console.error("Get my events error:", error);
+    res.status(500).json({
+      message: "Failed to fetch events",
+    });
+  }
+};
+
+//
+// ----------------------------------------
+// DELETE EVENT (Owner Only + Full Cleanup)
+// ----------------------------------------
+//
+exports.deleteEvent = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    const event = await Event.findById(eventId);
+
+    if (!event) {
+      return res.status(404).json({
+        message: "Event not found",
+      });
+    }
+
+    // 🔐 Only owner can delete
+    if (event.owner.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        message: "Only event owner can delete this event",
+      });
+    }
+
+    // --------------------------------------
+    // 1️⃣ Get all photos of this event
+    // --------------------------------------
+    const photos = await Photo.find({ event: event._id });
+
+    // --------------------------------------
+    // 2️⃣ Delete images from S3
+    // --------------------------------------
+    for (const photo of photos) {
+      try {
+        const command = new DeleteObjectCommand({
+          Bucket: process.env.AWS_S3_BUCKET,
+          Key: photo.s3Key,
+        });
+
+        await s3.send(command);
+      } catch (err) {
+        console.error("S3 delete error:", err.message);
+      }
+    }
+
+    // --------------------------------------
+    // 3️⃣ Delete photos from MongoDB
+    // --------------------------------------
+    await Photo.deleteMany({ event: event._id });
+
+    // --------------------------------------
+    // 4️⃣ Remove event from owner's createdEvents
+    // --------------------------------------
+    await User.findByIdAndUpdate(event.owner, {
+      $pull: { createdEvents: event._id },
+    });
+
+    // --------------------------------------
+    // 5️⃣ Remove event from all users' joinedEvents
+    // --------------------------------------
+    await User.updateMany(
+      { joinedEvents: event._id },
+      { $pull: { joinedEvents: event._id } }
+    );
+
+    // --------------------------------------
+    // 6️⃣ Delete event document
+    // --------------------------------------
+    await event.deleteOne();
+
+    res.status(200).json({
+      message: "Event and all related data deleted successfully",
+    });
+
+  } catch (error) {
+    console.error("Delete event error:", error);
+    res.status(500).json({
+      message: "Failed to delete event",
+    });
+  }
+};
+
