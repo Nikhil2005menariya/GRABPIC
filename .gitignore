@@ -55,7 +55,6 @@ ENV/
 *.pth
 *.ckpt
 models/
-ai-service/models/
 
 ############################################
 # Docker
